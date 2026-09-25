@@ -170,6 +170,95 @@ app.post('/consultar', requireAuth, async (req, res) => {
   }
 });
 
+// Estadísticas: top 10 de números que más salen (todos los sorteos)
+app.get('/estadisticas/top-numeros', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT numeros FROM sorteos');
+
+    const contador = {};
+    for (let i = 0; i <= 45; i++) {
+      contador[i.toString().padStart(2, '0')] = 0;
+    }
+
+    result.rows.forEach((row) => {
+      row.numeros.split(',').forEach((n) => {
+        const num = n.trim();
+        if (contador[num] !== undefined) {
+          contador[num]++;
+        }
+      });
+    });
+
+    const totalSorteos = result.rowCount;
+    const ranking = Object.entries(contador)
+      .map(([numero, veces]) => ({
+        numero,
+        veces,
+        porcentaje: totalSorteos > 0 ? ((veces / totalSorteos) * 100).toFixed(1) : '0',
+      }))
+      .sort((a, b) => b.veces - a.veces)
+      .slice(0, 10);
+
+    res.json({ ok: true, totalSorteos, ranking });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Estadísticas: ranking de los números del usuario
+app.get('/estadisticas/mis-numeros', requireAuth, async (req, res) => {
+  try {
+    const boletas = await pool.query(
+      `SELECT numeros FROM boletas WHERE user_id = $1 AND activa = TRUE`,
+      [req.userId]
+    );
+
+    if (boletas.rowCount === 0) {
+      return res.json({
+        ok: true,
+        mensaje: 'No tenés boletas activas',
+        ranking: [],
+      });
+    }
+
+    const numerosUsuario = new Set();
+    boletas.rows.forEach((b) => {
+      b.numeros.split(',').forEach((n) => numerosUsuario.add(n.trim()));
+    });
+
+    const result = await pool.query('SELECT numeros FROM sorteos');
+    const totalSorteos = result.rowCount;
+
+    const contador = {};
+    numerosUsuario.forEach((n) => {
+      contador[n] = 0;
+    });
+
+    result.rows.forEach((row) => {
+      row.numeros.split(',').forEach((n) => {
+        const num = n.trim();
+        if (contador[num] !== undefined) {
+          contador[num]++;
+        }
+      });
+    });
+
+    const ranking = Object.entries(contador)
+      .map(([numero, veces]) => ({
+        numero,
+        veces,
+        porcentaje: totalSorteos > 0 ? ((veces / totalSorteos) * 100).toFixed(1) : '0',
+      }))
+      .sort((a, b) => b.veces - a.veces);
+
+    res.json({ ok: true, totalSorteos, ranking });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);
