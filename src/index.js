@@ -81,7 +81,14 @@ app.post('/consultar', requireAuth, async (req, res) => {
       `SELECT TO_CHAR(fecha, 'YYYY-MM-DD') AS fecha, tipo_sorteo, numeros, numero_sorteo
        FROM sorteos
        WHERE fecha BETWEEN $1 AND $2
-       ORDER BY fecha DESC, tipo_sorteo`,
+       ORDER BY fecha DESC,
+                CASE tipo_sorteo
+                  WHEN 'tradicional' THEN 1
+                  WHEN 'segunda' THEN 2
+                  WHEN 'revancha' THEN 3
+                  WHEN 'siempre_sale' THEN 4
+                  ELSE 5
+                END`,
       [fecha_desde, fecha_hasta]
     );
 

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: patiti6-backend
+    name: patini6-backend
     runtime: node
     plan: free
     buildCommand: npm install
