@@ -13,7 +13,6 @@ app.use(express.json());
 app.use('/auth', authRouter);
 app.use('/boletas', boletasRouter);
 
-// Endpoint de prueba: verifica que la conexión a Neon funcione
 app.get('/ping', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
@@ -24,13 +23,11 @@ app.get('/ping', async (req, res) => {
   }
 });
 
-// Convierte DD/MM/YYYY a YYYY-MM-DD
 function formatearFecha(fecha) {
   const [dia, mes, anio] = fecha.split('/');
   return `${anio}-${mes}-${dia}`;
 }
 
-// Endpoint: scrapea y guarda todos los sorteos en Neon
 app.post('/sync', async (req, res) => {
   try {
     const sorteos = await obtenerTodosLosSorteos();
@@ -69,7 +66,6 @@ app.post('/sync', async (req, res) => {
   }
 });
 
-// Consulta las boletas del usuario contra los sorteos en un rango de fechas
 app.post('/consultar', requireAuth, async (req, res) => {
   try {
     const { fecha_desde, fecha_hasta } = req.body;
@@ -81,7 +77,6 @@ app.post('/consultar', requireAuth, async (req, res) => {
       });
     }
 
-    // 1. Buscar sorteos en el rango
     const sorteosResult = await pool.query(
       `SELECT TO_CHAR(fecha, 'YYYY-MM-DD') AS fecha, tipo_sorteo, numeros, numero_sorteo
        FROM sorteos
@@ -99,7 +94,6 @@ app.post('/consultar', requireAuth, async (req, res) => {
       });
     }
 
-    // 2. Buscar boletas vigentes del usuario en el rango
     const boletasResult = await pool.query(
       `SELECT id, numeros, tipo,
               TO_CHAR(fecha_desde, 'YYYY-MM-DD') AS fecha_desde,
@@ -121,14 +115,12 @@ app.post('/consultar', requireAuth, async (req, res) => {
       });
     }
 
-    // 3. Agrupar sorteos por fecha para calcular el Premio Extra
     const sorteosPorFecha = {};
     sorteosResult.rows.forEach((s) => {
       if (!sorteosPorFecha[s.fecha]) sorteosPorFecha[s.fecha] = [];
       sorteosPorFecha[s.fecha].push(s);
     });
 
-    // Números únicos del Extra por fecha (Tradicional + Segunda + Revancha)
     const numerosExtraPorFecha = {};
     Object.keys(sorteosPorFecha).forEach((fecha) => {
       const set = new Set();
@@ -140,7 +132,6 @@ app.post('/consultar', requireAuth, async (req, res) => {
       numerosExtraPorFecha[fecha] = Array.from(set);
     });
 
-    // 4. Cruzar: por cada boleta × cada sorteo
     const resultados = [];
     for (const boleta of boletasResult.rows) {
       const numerosBoleta = boleta.numeros.split(',').map((n) => n.trim());
@@ -155,6 +146,7 @@ app.post('/consultar', requireAuth, async (req, res) => {
         resultados.push({
           boleta_id: boleta.id,
           boleta_tipo: boleta.tipo,
+          boleta_numeros: boleta.numeros,
           fecha: sorteo.fecha,
           numero_sorteo: sorteo.numero_sorteo,
           tipo_sorteo: sorteo.tipo_sorteo,
