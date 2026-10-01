@@ -1,95 +1,111 @@
 const axios = require('axios');
-const cheerio = require('cheerio');
+const Optiic = require('optiic');
 
-// Calcula la fecha del sorteo y construye la URL de TN
-function construirURL() {
-  const hoy = new Date();
-  const diaSemana = hoy.getDay(); // 0 = Domingo, 3 = Miércoles
-  
-  let fechaSorteo = new Date(hoy);
-  
-  // Retroceder al último miércoles o domingo según el día actual
-  if (diaSemana === 1) fechaSorteo.setDate(hoy.getDate() - 1); // Lunes → Domingo
-  else if (diaSemana === 2) fechaSorteo.setDate(hoy.getDate() - 2); // Martes → Domingo
-  else if (diaSemana === 4) fechaSorteo.setDate(hoy.getDate() - 1); // Jueves → Miércoles
-  else if (diaSemana === 5) fechaSorteo.setDate(hoy.getDate() - 2); // Viernes → Miércoles
-  else if (diaSemana === 6) fechaSorteo.setDate(hoy.getDate() - 3); // Sábado → Miércoles
-  else if (diaSemana === 0 && hoy.getHours() < 21) fechaSorteo.setDate(hoy.getDate() - 4); // Domingo antes de las 21 → Miércoles
-  else if (diaSemana === 3 && hoy.getHours() < 21) fechaSorteo.setDate(hoy.getDate() - 3); // Miércoles antes de las 21 → Domingo
-  
-  // La URL de TN usa el día siguiente al sorteo
-  const fechaURL = new Date(fechaSorteo);
-  fechaURL.setDate(fechaURL.getDate() + 1);
-  
-  const anio = fechaURL.getFullYear();
-  const mes = String(fechaURL.getMonth() + 1).padStart(2, '0');
-  const dia = String(fechaURL.getDate()).padStart(2, '0');
-  
-  const diasSemana = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-  const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-  
-  const diaSorteo = fechaSorteo.getDate();
-  const mesSorteo = meses[fechaSorteo.getMonth()];
-  const nombreDia = diasSemana[fechaSorteo.getDay()];
-  
-  return {
-    url: `https://tn.com.ar/sociedad/${anio}/${mes}/${dia}/quini-6-los-resultados-de-este-${nombreDia}-${diaSorteo}-de-${mesSorteo}/`,
-    fecha: fechaSorteo,
-    numero: null
-  };
-}
+// Configuración desde variables de entorno
+const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
+const CF_API_TOKEN = process.env.CF_API_TOKEN;
+const OPTIIC_API_KEY = process.env.OPTIIC_API_KEY;
+
+const optiic = new Optiic({ apiKey: OPTIIC_API_KEY });
+
+// URL de la página oficial de Lotería de Santa Fe
+const URL_LOTERIA = 'https://www.loteriasantafe.gov.ar/quini-6-2/';
 
 async function obtenerResultadoSorteo() {
-  const { url, fecha } = construirURL();
-  
-  console.log(`Buscando resultados en: ${url}`);
-  
-  const { data } = await axios.get(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+  try {
+    // 1. Pedir a Cloudflare que saque una foto de la página
+    console.log('Solicitando screenshot a Cloudflare...');
+    const screenshotResponse = await axios.post(
+      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/browser-rendering/screenshot`,
+      {
+        url: URL_LOTERIA,
+        gotoOptions: {
+          waitUntil: 'networkidle0' // Espera a que cargue todo el JavaScript
+        },
+        viewport: {
+          width: 1280,
+          height: 900
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${CF_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        responseType: 'arraybuffer' // La respuesta es una imagen binaria
+      }
+    );
+
+    // 2. Convertir la imagen a base64 para Optiic
+    const imageBase64 = Buffer.from(screenshotResponse.data, 'binary').toString('base64');
+    const imageDataUrl = `data:image/png;base64,${imageBase64}`;
+    console.log('Screenshot obtenido. Procesando con OCR...');
+
+    // 3. Enviar la imagen a Optiic para extraer el texto
+    const ocrResult = await optiic.process({
+      url: imageDataUrl,
+      mode: 'ocr',
+      language: 'es' // Español
+    });
+
+    const textoCompleto = ocrResult.text;
+    console.log('Texto extraído por OCR:', textoCompleto.substring(0, 200) + '...');
+
+    // 4. Extraer los números de cada modalidad del texto
+    const extraerNumeros = (nombre) => {
+      // Busca el nombre de la modalidad seguido de 6 números de 2 dígitos
+      const regex = new RegExp(
+        `${nombre}[\\s\\S]*?([\\d]{2}[\\s,;.-]+[\\d]{2}[\\s,;.-]+[\\d]{2}[\\s,;.-]+[\\d]{2}[\\s,;.-]+[\\d]{2}[\\s,;.-]+[\\d]{2})`,
+        'i'
+      );
+      const match = textoCompleto.match(regex);
+      if (match && match[1]) {
+        return match[1].replace(/[^\d]/g, ',').replace(/,+/g, ',').replace(/^,|,$/g, '');
+      }
+      return null;
+    };
+
+    const tradicional = extraerNumeros('Tradicional');
+    const segunda = extraerNumeros('La Segunda');
+    const revancha = extraerNumeros('Revancha');
+    const siempreSale = extraerNumeros('Siempre Sale');
+
+    if (!tradicional) {
+      throw new Error('No se pudieron extraer los números. El OCR puede haber fallado o la página no cargó bien.');
     }
-  });
-  
-  const $ = cheerio.load(data);
-  const textoCompleto = $('body').text();
-  
-  // Extraer número de sorteo
-  const matchSorteo = textoCompleto.match(/sorteo\s+N\.?º?\s*(\d+)/i);
-  const numeroSorteo = matchSorteo ? matchSorteo[1] : 'Desconocido';
-  
-  // Extraer números por modalidad
-  const extraerNumeros = (nombre) => {
-    const regex = new RegExp(`${nombre}[\\s\\S]*?([\\d]{2}\\s*[-–—]\\s*[\\d]{2}\\s*[-–—]\\s*[\\d]{2}\\s*[-–—]\\s*[\\d]{2}\\s*[-–—]\\s*[\\d]{2}\\s*[-–—]\\s*[\\d]{2})`, 'i');
-    const match = textoCompleto.match(regex);
-    if (match && match[1]) {
-      return match[1].replace(/[-–—\s]/g, ',').replace(/,+/g, ',').replace(/^,|,$/g, '');
-    }
-    return null;
-  };
-  
-  const tradicional = extraerNumeros('Tradicional');
-  const segunda = extraerNumeros('La Segunda');
-  const revancha = extraerNumeros('Revancha');
-  const siempreSale = extraerNumeros('Siempre Sale');
-  
-  if (!tradicional) {
-    throw new Error('No se pudieron extraer los números. TN puede haber cambiado la estructura o el título del artículo.');
+
+    // 5. Extraer número de sorteo (opcional)
+    const matchSorteo = textoCompleto.match(/sorteo\s+N\.?º?\s*(\d+)/i);
+    const numeroSorteo = matchSorteo ? matchSorteo[1] : 'Desconocido';
+
+    // 6. Calcular fecha del último sorteo
+    const hoy = new Date();
+    const diaSemana = hoy.getDay();
+    let fechaSorteo = new Date(hoy);
+    if (diaSemana === 1) fechaSorteo.setDate(hoy.getDate() - 1);
+    else if (diaSemana === 2) fechaSorteo.setDate(hoy.getDate() - 2);
+    else if (diaSemana === 4) fechaSorteo.setDate(hoy.getDate() - 1);
+    else if (diaSemana === 5) fechaSorteo.setDate(hoy.getDate() - 2);
+    else if (diaSemana === 6) fechaSorteo.setDate(hoy.getDate() - 3);
+    else if (diaSemana === 0 && hoy.getHours() < 21) fechaSorteo.setDate(hoy.getDate() - 4);
+    else if (diaSemana === 3 && hoy.getHours() < 21) fechaSorteo.setDate(hoy.getDate() - 3);
+
+    const fechaFormateada = `${String(fechaSorteo.getDate()).padStart(2, '0')}/${String(fechaSorteo.getMonth() + 1).padStart(2, '0')}/${fechaSorteo.getFullYear()}`;
+
+    return {
+      numero: numeroSorteo,
+      fecha: fechaFormateada,
+      resultados: [
+        { tipo: 'tradicional', numeros: tradicional },
+        { tipo: 'segunda', numeros: segunda },
+        { tipo: 'revancha', numeros: revancha },
+        { tipo: 'siempre_sale', numeros: siempreSale }
+      ]
+    };
+  } catch (error) {
+    console.error('Error en el scraper:', error.message);
+    throw error;
   }
-  
-  const fechaFormateada = `${String(fecha.getDate()).padStart(2, '0')}/${String(fecha.getMonth() + 1).padStart(2, '0')}/${fecha.getFullYear()}`;
-  
-  return {
-    numero: numeroSorteo,
-    fecha: fechaFormateada,
-    resultados: [
-      { tipo: 'tradicional', numeros: tradicional },
-      { tipo: 'segunda', numeros: segunda },
-      { tipo: 'revancha', numeros: revancha },
-      { tipo: 'siempre_sale', numeros: siempreSale }
-    ]
-  };
 }
 
 async function obtenerTodosLosSorteos() {
