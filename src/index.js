@@ -28,7 +28,8 @@ function formatearFecha(fecha) {
   return `${anio}-${mes}-${dia}`;
 }
 
-app.post('/sync', async (req, res) => {
+// Función que hace el scraping y guarda en la base (sin cambios en su lógica)
+async function ejecutarSync() {
   try {
     const sorteos = await obtenerTodosLosSorteos();
     let insertados = 0;
@@ -56,14 +57,16 @@ app.post('/sync', async (req, res) => {
       }
     }
 
-    res.json({
-      ok: true,
-      message: `Sync completo: ${insertados} insertados, ${duplicados} duplicados`,
-    });
+    console.log(`Sync completado: ${insertados} insertados, ${duplicados} duplicados`);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('Error en sync:', err.message);
   }
+}
+
+// Endpoint que responde inmediatamente y lanza el sync en segundo plano
+app.post('/sync', (req, res) => {
+  res.json({ ok: true, message: 'Sync iniciado' });
+  ejecutarSync();
 });
 
 app.post('/consultar', requireAuth, async (req, res) => {
